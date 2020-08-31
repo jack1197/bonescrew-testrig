@@ -31,11 +31,41 @@
 			<locationURI>TIVAWARE/third_party/FreeRTOS/Source</locationURI>
 		</link>
 		<link>
+			<name>usblib</name>
+			<type>2</type>
+			<locationURI>TIVAWARE/usblib</locationURI>
+		</link>
+		<link>
+			<name>utils/uartstdio.c</name>
+			<type>1</type>
+			<locationURI>TIVAWARE/utils/uartstdio.c</locationURI>
+		</link>
+		<link>
 			<name>utils/ustdlib.c</name>
 			<type>1</type>
 			<locationURI>TIVAWARE/utils/ustdlib.c</locationURI>
 		</link>
 	</linkedResources>
+	<filteredResources>
+		<filter>
+			<id>1598863997834</id>
+			<name>usblib</name>
+			<type>21</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-*.c</arguments>
+			</matcher>
+		</filter>
+		<filter>
+			<id>1598863997848</id>
+			<name>usblib</name>
+			<type>21</type>
+			<matcher>
+				<id>org.eclipse.ui.ide.multiFilter</id>
+				<arguments>1.0-name-matches-false-false-*.h</arguments>
+			</matcher>
+		</filter>
+	</filteredResources>
 	<variableList>
 		<variable>
 			<name>TIVAWARE</name>
