@@ -27,6 +27,7 @@ extern "C"
 
 #include "Tasks/UsbTask.hpp"
 #include "Tasks/HeartbeatTask.hpp"
+#include "Tasks/DatalogTask.hpp"
 
 
 
@@ -102,10 +103,19 @@ int main(void)
     //
     UARTStdioConfig(0, 115200, 16000000);
 
-    static UsbTask usbTask(&led1);
+    static Queue<QueueableEvent> usbEventQueue = Queue<QueueableEvent>(16);
+    static Queue<DataFrame> outputBuffer(16);
+    static Semaphore dataShouldStart(1,0);
+    static Semaphore dataHasEnded(1,0);
+    static bool shouldStop = false;
+    static bool shouldSendData = false;
+
+    static UsbTask usbTask(&led1, &usbEventQueue, &outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &shouldSendData);
     usbTask.Initialize();
     static HeartbeatTask heartbeatTask(&led2);
     heartbeatTask.Initialize();
+    static DatalogTask datalogTask(&outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &usbEventQueue, &shouldSendData);
+    datalogTask.Initialize();
 
     vTaskStartScheduler();
 

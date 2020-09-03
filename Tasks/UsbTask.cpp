@@ -5,18 +5,22 @@
  *      Author: Jack
  */
 
+#include <cstring>
 #include <Tasks/UsbTask.hpp>
 
 extern "C"
 {
 #include "inc/hw_memmap.h"
 #include "inc/hw_types.h"
+#include "inc/tm4c123fh6pm.h"
 
 #include "driverlib/sysctl.h"
 #include "driverlib/usb.h"
 #include "driverlib/gpio.h"
+#include "driverlib/interrupt.h"
 
 #include "utils/uartstdio.h"
+#include "usblib/usblibpriv.h"
 }
 
 
@@ -24,6 +28,10 @@ extern "C"
 
 #define DATA_IN_EP_MAX_SIZE     USBFIFOSizeToBytes(USB_FIFO_SZ_64)
 #define DATA_OUT_EP_MAX_SIZE    USBFIFOSizeToBytes(USB_FIFO_SZ_64)
+
+#define USB_RX_ERROR_FLAGS      (USBERR_DEV_RX_DATA_ERROR |                   \
+                                 USBERR_DEV_RX_OVERRUN |                      \
+                                 USBERR_DEV_RX_FIFO_FULL)
 
 const uint8_t* UsbTask::g_pui8TorqueDeviceDescriptor =
 (const uint8_t[])
@@ -34,9 +42,9 @@ const uint8_t* UsbTask::g_pui8TorqueDeviceDescriptor =
                                 // high-speed - see USB 2.0 spec 9.2.6.6)
     USB_CLASS_VEND_SPECIFIC,    // USB Device Class
     0,                          // USB Device Sub-class
-    0,                          // USB Device protocol
+    1,                          // USB Device protocol
     64,                         // Maximum packet size for default pipe.
-    USBShort(0x1483),           // Vendor ID (VID).
+    USBShort(0x0483),           // Vendor ID (VID).
     USBShort(0xa104),           // Product ID (PID).
     USBShort(0x100),            // Device Version BCD.
     1,                          // Manufacturer string identifier.
@@ -59,7 +67,7 @@ const uint8_t* UsbTask::g_pui8TorqueConfigurationDescriptor =
     1,                          // The unique value for this configuration.
     4,                          // The string identifier that describes this
                                 // configuration.
-    USB_CONF_ATTR_SELF_PWR,      // Bus Powered, Self Powered, remote wake up.
+    USB_CONF_ATTR_BUS_PWR,      // Bus Powered, Self Powered, remote wake up.
     50,                        // The maximum power in 2mA increments.
 };
 
@@ -166,7 +174,7 @@ const tCustomHandlers UsbTask::g_sTorqueHandlers =
     //
     // ConfigChange
     //
-    HandleConfigChange,
+    0,
 
     //
     // DataReceived
@@ -186,17 +194,17 @@ const tCustomHandlers UsbTask::g_sTorqueHandlers =
     //
     // SuspendHandler
     //
-    HandleSuspend,
+    0,
 
     //
     // ResumeHandler
     //
-    HandleResume,
+    0,
 
     //
     // DisconnectHandler
     //
-    HandleDisconnect,
+    0,
 
     //
     // EndpointHandler
@@ -206,7 +214,7 @@ const tCustomHandlers UsbTask::g_sTorqueHandlers =
     //
     // Device handler
     //
-    HandleDevice
+    0
 };
 
 const uint8_t* UsbTask::g_pui8LangDescriptor =
@@ -280,13 +288,55 @@ tDeviceInfo UsbTask::g_sTorqueDeviceInfo =
 
 };
 
-UsbTask::UsbTask(GPIO* activeLed)
-    :activeLed(activeLed)
+UsbTask::UsbTask(GPIO* activeLed, Queue<QueueableEvent>* usbEventQueue, Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, bool* shouldSendData)
+    :activeLed(activeLed), usbEventQueue(usbEventQueue), outputBuffer(outputBuffer), dataShouldStart(dataShouldStart), dataHasEnded(dataHasEnded), shouldStop(shouldStop), shouldSendData(shouldSendData)
 {
     priority = 3;
     stackSize = 1024;
     taskName = "UsbTask";
 }
+
+#define CONTROL_BUFFER_SIZE 512
+
+static uint8_t cmdBufferArray[CONTROL_BUFFER_SIZE];
+tUSBBuffer UsbTask::cmdBuffer =
+{
+    false, //USB->APP
+    rxHandlerCmdEP,
+    0,
+    readCmdEP,
+    availableCmdEP,
+    (void *)&g_sTorqueDeviceInfo,
+    cmdBufferArray,
+    CONTROL_BUFFER_SIZE
+};
+
+static uint8_t rspBufferArray[CONTROL_BUFFER_SIZE];
+tUSBBuffer UsbTask::rspBuffer =
+{
+    true,//APP->USB
+    txHandlerRspEP,
+    0,
+    writeRspEP,
+    availableRspEP,
+    0,
+    rspBufferArray,
+    CONTROL_BUFFER_SIZE
+};
+#define DAT_BUFFER_SIZE 32
+
+static uint8_t datBufferArray[DAT_BUFFER_SIZE];
+tUSBBuffer UsbTask::datBuffer =
+{
+    true, //APP->USB
+    txHandlerDatEP,
+    0,
+    writeDatEP,
+    availableDatEP,
+    0,
+    datBufferArray,
+    DAT_BUFFER_SIZE
+};
 
 
 void UsbTask::Setup()
@@ -298,9 +348,303 @@ void UsbTask::Setup()
     GPIOPinTypeUSBAnalog(GPIO_PORTB_BASE, GPIO_PIN_0 | GPIO_PIN_1);
     USBStackModeSet(0, eUSBModeDevice, 0);
 
-    USBDCDInit(0, &g_sTorqueDeviceInfo, this);
+    InternalUSBTickInit();
+    InternalUSBRegisterTickHandler(HandleUSBTick, (void*)this);
+
+    IntPrioritySet(INT_USB0, (5 << 5) );
+
+    USBDCDInit(0, &g_sTorqueDeviceInfo, (void*)this);
+
+    cmdBuffer.pvCBData = (void*)this;
+    rspBuffer.pvCBData = (void*)this;
+    datBuffer.pvCBData = (void*)this;
+
+    cmdBuffer.pvHandle = (void*)this;
+    rspBuffer.pvHandle = (void*)this;
+    datBuffer.pvHandle = (void*)this;
+
+    USBBufferInit(&cmdBuffer);
+    USBBufferInit(&rspBuffer);
+    USBBufferInit(&datBuffer);
+
 }
 
+
+void UsbTask::HandleReset(void *pvUsbTask)//first connect or reconnect
+{
+    UsbTask* usbTask = (UsbTask*)pvUsbTask;
+    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::Reset, false);
+}
+
+
+void UsbTask::HandleEndpoints(void *pvUsbTask, uint32_t ui32Status)
+{
+    UsbTask* usbTask = (UsbTask*)pvUsbTask;
+
+    if(ui32Status & USB_EP_DESC_IN | USBEPToIndex(USB_EP_1))
+    {
+        usbTask->processRspEP(ui32Status);
+    }
+    if(ui32Status & USB_EP_DESC_OUT | USBEPToIndex(USB_EP_2))
+    {
+        usbTask->processCmdEP(ui32Status);
+    }
+    if(ui32Status & USB_EP_DESC_IN | USBEPToIndex(USB_EP_3))
+    {
+        usbTask->processDatEP(ui32Status);
+    }
+}
+
+
+void UsbTask::HandleUSBTick(void *pvUsbTask, uint32_t ui32TimemS)
+{
+    UsbTask* usbTask = (UsbTask*)pvUsbTask;
+    if (usbTask->defferedRead)
+    {
+        uint32_t availSize = USBEndpointDataAvail(USB0_BASE, USB_EP_2);
+        USBBufferEventCallback(&cmdBuffer, USB_EVENT_RX_AVAILABLE, availSize, (void*)0);
+    }
+}
+
+void UsbTask::processCmdEP(uint32_t ui32Status)
+{
+    uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_2);
+    USBDevEndpointStatusClear(USB0_BASE, USB_EP_2, EPStatus);
+    if(EPStatus & USB_DEV_RX_PKT_RDY)
+    {
+        defferedRead = true;
+        uint32_t availSize = USBEndpointDataAvail(USB0_BASE, USB_EP_2);
+        USBBufferEventCallback(&cmdBuffer, USB_EVENT_RX_AVAILABLE, availSize, (void*)0);
+    }
+    else if(EPStatus & USB_RX_ERROR_FLAGS)
+    {
+        USBBufferEventCallback(&cmdBuffer, USB_EVENT_ERROR, (EPStatus & USB_RX_ERROR_FLAGS), (void*)0);
+    }
+}
+
+void UsbTask::processRspEP(uint32_t ui32Status)
+{
+    uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_1);
+    USBDevEndpointStatusClear(USB0_BASE, USB_EP_1, EPStatus);
+    rspActive = false;
+    USBBufferEventCallback(&rspBuffer, USB_EVENT_TX_COMPLETE, lastRspSize, (void*)0);
+}
+
+void UsbTask::processDatEP(uint32_t ui32Status)
+{
+    uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_3);
+    USBDevEndpointStatusClear(USB0_BASE, USB_EP_3, EPStatus);
+    datActive = false;
+    USBBufferEventCallback(&datBuffer, USB_EVENT_TX_COMPLETE, lastDatSize, (void*)0);
+}
+
+uint32_t UsbTask::availableCmdEP(void *pvHandle)
+{
+    //UsbTask* usbTask = (UsbTask*)pvHandle;
+    uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_2);
+    if(EPStatus & USB_DEV_RX_PKT_RDY)
+    {
+        uint32_t avail = USBEndpointDataAvail(USB0_BASE, USB_EP_2);
+        return avail;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+uint32_t UsbTask::availableRspEP(void *pvHandle)
+{
+    UsbTask* usbTask = (UsbTask*)pvHandle;
+    if(usbTask->rspActive)
+    {
+        return 0;
+    }
+    else
+    {
+        return g_ui16MaxPacketSize;
+    }
+
+}
+
+uint32_t UsbTask::availableDatEP(void *pvHandle)
+{
+    UsbTask* usbTask = (UsbTask*)pvHandle;
+
+    if(usbTask->datActive)
+    {
+        return 0;
+    }
+    else
+    {
+        return g_ui16MaxPacketSize;
+    }
+
+}
+
+uint32_t UsbTask::readCmdEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast)
+{
+    UsbTask* usbTask = (UsbTask*)pvHandle;
+    uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_2);
+    if(EPStatus & USB_DEV_RX_PKT_RDY)
+    {
+        uint32_t avail = USBEndpointDataAvail(USB0_BASE, USB_EP_2);
+        uint32_t count = ui32Length;
+        int32_t status = USBEndpointDataGet(USB0_BASE, USB_EP_2, pi8Data, &count);
+        if (count == avail)
+        {
+            USBDevEndpointStatusClear(USB0_BASE, USB_EP_2, EPStatus);
+            USBDevEndpointDataAck(USB0_BASE, USB_EP_2, true);
+            usbTask->defferedRead = false;
+        }
+        if (status != -1)
+        {
+            return count;
+        }
+    }
+
+    return 0;
+}
+
+uint32_t UsbTask::writeRspEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast)
+{
+    UsbTask* usbTask = (UsbTask*)pvHandle;
+    if(ui32Length > g_ui16MaxPacketSize || usbTask->rspActive) return 0;
+
+    int32_t status = USBEndpointDataPut(USB0_BASE, USB_EP_1, pi8Data, ui32Length);
+
+    if(status != -1)
+    {
+        usbTask->lastRspSize = ui32Length;
+        if(bLast)
+        {
+            usbTask->rspActive = true;
+            USBEndpointDataSend(USB0_BASE, USB_EP_1, USB_TRANS_IN);
+        }
+        return ui32Length;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+uint32_t UsbTask::writeDatEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast)
+{
+    UsbTask* usbTask = (UsbTask*)pvHandle;
+    if(ui32Length > g_ui16MaxPacketSize || usbTask->datActive) return 0;
+    //clamp length to multiple of 16
+    ui32Length = (ui32Length / 16) * 16;
+
+    int32_t status = USBEndpointDataPut(USB0_BASE, USB_EP_3, pi8Data, ui32Length);
+
+    if(status != -1)
+    {
+        usbTask->lastDatSize = ui32Length;
+        if(bLast)
+        {
+            usbTask->datActive = true;
+            USBEndpointDataSend(USB0_BASE, USB_EP_3, USB_TRANS_IN);
+        }
+        return ui32Length;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+
+static const char hw_typeCmd[] = "hw_type\r";
+static const char hw_typeRsp[] = "hw_type 13\r\n";
+
+static const char config_dumpCmd[] = "config_dump\r";
+static const char config_dumpRsp[] =
+"config_dump 45\r\n\
+1 Test_1 0 -1 f 0x00000000\r\n\
+2 Serial 0 16 s _big_fat_phnoy00\r\n\
+3 SDADC_Timer_/us 0 10000 u 0\r\n\
+4 Temp_ADC_Timer_/us 15 10000 u 625\r\n\
+5 ADC1_3_Filter_Size 1 128 u 16\r\n\
+6 SDADC_Filter_Size 1 10 u 2\r\n\
+7 FG_analog_/Hz 20 10000 u 100\r\n\
+8 DAC_Timer_/us 0 10000 u 100\r\n\
+9 SIG_GAIN_mV/LSB16 -10 10 f 0x3E340A6C\r\n\
+10 SIG_OFFSET_LSB16 -20000 20000 i 287\r\n\
+11 Cal_Nm/mV -100 100 f 0x3BA3D70A\r\n\
+12 Out_mV_at_0Nm 0 22000 u 5000\r\n\
+13 Out_mV_at_Error 0 22000 u 10000\r\n\
+14 DAC_GAIN_LSB14/mV -10 10 f 0x3FBF5AA7\r\n\
+15 DAC_OFFSET_LSB14 -8000 8000 i 3\r\n\
+16 DAC_Test_Mode_mV 0 22000 u 0\r\n\
+17 DAC_Test_Mode_LSB14 0 16383 u 0\r\n\
+18 DAC_5V_Output 0 1 u 0\r\n\
+19 DAC_4-20mA_Output 0 1 u 0\r\n\
+20 Temp_Int_Min -1000 1000 i 100\r\n\
+21 Temp_Int_Max -1000 1000 i 0\r\n\
+22 Temp_Ext_Min -1000 1000 i 100\r\n\
+23 Temp_Ext_Max -1000 1000 i 0\r\n\
+24 Temp_Ext_Test -100 300 i 0\r\n\
+25 Temp_Sens_Ext 0 3 u 3\r\n\
+26 Lifetime_/Min 0 65535 u 0\r\n\
+27 CAN_ID_(BASE) 1 65535 u 6394\r\n\
+28 CAN_ID_(EXTENSION) 0 65535 u 32818\r\n\
+29 CAN_ID_FILTER 0 29 u 0\r\n\
+30 CAN_Baudrate_/kBps 10 1000 u 250\r\n\
+31 CAN_Auto_Send_1ms 0 60000 u 100\r\n\
+32 CAN_Auto_Send_CMD 0 1000 u 8\r\n\
+33 CAN_notAck_RT 0 1 u 0\r\n\
+34 Use_Onewire_on_EE_Pin 0 1 u 0\r\n\
+35 RPM_Source 0 3 u 2\r\n\
+36 Use_Angle_Sensor_on_TIM19 0 1 u 1\r\n\
+37 Angle_Cnt 1 65535 u 360\r\n\
+38 SIG_Out_Nm_mult -4 3 i -2\r\n\
+39 Use_UART 0 1 u 0\r\n\
+40 UART_Baudrate_/100Bps 1 60000 u 1152\r\n\
+41 Temp_Comp_Faktor -2 2 f 0x00000000\r\n\
+42 Temp_Comp_Offset 0 100 u 25\r\n\
+43 USB_enable 0 1 u 1\r\n\
+44 Filter_Type 0 4 u 3\r\n\
+45 Exponential_Faktor 0 10000 u 1\r\n";
+
+static const char hw_idCmd[] = "hw_id_get\r";
+static const char hw_idRsp[] = "hw_id_get 0123456789\r\n";
+
+static const char measure_startCmd[] = "measure_start 10000\r";
+static const char measure_startRsp[] = "measure_start 10000\r\n";
+
+static const char measure_stopCmd[] = "measure_stop\r";
+static const char measure_stopRsp[] = "measure_stop\r\n";
+
+static const char angle_readCmd[] = "angle_read\r";
+static const char angle_readRsp[] = "angle_read 0 0\r\n";
+
+uint32_t UsbTask::rxHandlerCmdEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData)
+{
+    UsbTask* usbTask = (UsbTask*)pvCBData;
+    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::CmdAvail, false);
+//    uint8_t buffer[65];
+//    uint32_t read = USBBufferRead(&cmdBuffer,buffer, 64);
+//    USBBufferWrite(&rspBuffer, buffer, read+1);
+//    buffer[read] = 0;
+//    UARTprintf("%s\n",buffer);
+    return 0;
+}
+
+uint32_t UsbTask::txHandlerRspEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData)
+{
+    UsbTask* usbTask = (UsbTask*)pvCBData;
+    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::RspAvail, false);
+    return 0;
+}
+
+uint32_t UsbTask::txHandlerDatEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData)
+{
+    UsbTask* usbTask = (UsbTask*)pvCBData;
+    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::DatReady, false);
+    return 0;
+
+}
 
 void UsbTask::TaskMethod()
 {
@@ -311,54 +655,140 @@ void UsbTask::TaskMethod()
     volatile UBaseType_t uxHighWaterMark;
     while(1)
     {
-        uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 
-        vTaskDelayUntil(&xLastWakeTime, 5 / portTICK_RATE_MS );
+        uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+        QueueableEvent event = QueueableEvent::NoEvent;
+        usbEventQueue->Dequeue(&event, true);
+
+        switch(event)
+        {
+        case QueueableEvent::CmdAvail:
+        {
+            //assuming all commands fit in 1 packet
+            char cmd[65];
+            uint32_t read = USBBufferRead(&cmdBuffer,(uint8_t*)cmd, 64);
+            if (read > 0)
+            {
+                if (strncmp(cmd, hw_typeCmd, sizeof(hw_typeCmd)-1) == 0)
+                {
+                    startRsp(hw_typeRsp, sizeof(hw_typeRsp)-1);
+                }
+                else if (strncmp(cmd, config_dumpCmd, sizeof(config_dumpCmd)-1) == 0)
+                {
+                    startRsp(config_dumpRsp, sizeof(config_dumpRsp)-1);
+                }
+                else if (strncmp(cmd, hw_idCmd, sizeof(hw_idCmd)-1) == 0)
+                {
+                    startRsp(hw_idRsp, sizeof(hw_idRsp)-1);
+                }
+                else if (strncmp(cmd, measure_startCmd, sizeof(measure_startCmd)-1) == 0)
+                {
+                    logging = true;
+                    dataShouldStart->Give();
+                    startRsp(measure_startRsp, sizeof(measure_startRsp)-1);
+                }
+                else if (strncmp(cmd, measure_stopCmd, sizeof(measure_stopCmd)-1) == 0)
+                {
+                    *shouldStop = true;
+                    dataHasEnded->Take();
+                    *shouldStop = false;
+                    logging = false;
+                    startRsp(measure_stopRsp, sizeof(measure_stopRsp)-1);
+                }
+                else if (strncmp(cmd, angle_readCmd, sizeof(angle_readCmd)-1) == 0)
+                {
+                    startRsp(angle_readRsp, sizeof(angle_readRsp)-1);
+                }
+            }
+        }
+            break;
+        case QueueableEvent::RspAvail:
+            if(rspRemaining && rspResume)
+            {
+                uint32_t written = 0;
+                do
+                {
+                    written = USBBufferWrite(&rspBuffer, (uint8_t*)rspResume, rspRemaining);
+                    rspRemaining -= written;
+                    if(rspRemaining == 0)
+                    {
+                        rspResume = nullptr;
+                    }
+                    else
+                    {
+                        rspResume += written;
+                    }
+                } while (written > 0 && rspResume && rspRemaining);
+            }
+            break;
+        case QueueableEvent::DatAvail:
+            //remove block from DataAvail events
+            if(*shouldSendData){
+                *shouldSendData = false;
+            }
+            //intended fallthrough
+        case QueueableEvent::DatReady:
+        {
+            bool success;
+            do
+            {
+                DataFrame frame;
+                success = false;
+                if(USBBufferSpaceAvailable(&datBuffer) < sizeof(DataFrame)) break;
+                success = outputBuffer->Dequeue(&frame, false);
+                if (success)
+                {
+                    //may take 2 writes
+                    int written = USBBufferWrite(&datBuffer, (uint8_t*)&frame, sizeof(DataFrame));
+                    written += USBBufferWrite(&datBuffer, ((uint8_t*)&frame) + written, sizeof(DataFrame)- written);
+                    if (written != sizeof(DataFrame)) while(1){};
+                }
+            } while(success);
+        }
+            break;
+        case QueueableEvent::Reset:
+            rspRemaining = 0;
+            rspResume = nullptr;
+            {
+                bool success = false;
+                do
+                {
+                    DataFrame frame;
+                    success = outputBuffer->Dequeue(&frame, false);
+                } while(success);
+            }
+            if(logging)
+            {
+                *shouldStop = true;
+                dataHasEnded->Take();
+                *shouldStop = false;
+                logging = false;
+            }
+            break;
+        default:
+            break;
+        }
     }
 }
 
-
-void UsbTask::HandleReset(void *pvUsbTask)
+void UsbTask::startRsp(const char* toSend, size_t length)
 {
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-    usbTask->activeLed->setActiveState(1);
+    rspRemaining = length;
+    rspResume = toSend;
+    uint32_t written = 0;
+    do
+    {
+        written = USBBufferWrite(&rspBuffer, (uint8_t*)rspResume, rspRemaining);
+        rspRemaining -= written;
+        if(rspRemaining == 0)
+        {
+            rspResume = nullptr;
+        }
+        else
+        {
+            rspResume += written;
+        }
+    } while (written > 0 && rspResume && rspRemaining);
+
 }
 
-
-
-void UsbTask::HandleConfigChange(void *pvUsbTask, uint32_t ui32Info)
-{
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-}
-
-
-void UsbTask::HandleDisconnect(void *pvUsbTask)
-{
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-    usbTask->activeLed->setActiveState(1);
-}
-
-
-void UsbTask::HandleEndpoints(void *pvUsbTask, uint32_t ui32Status)
-{
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-}
-
-
-void UsbTask::HandleSuspend(void *pvUsbTask)
-{
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-}
-
-
-void UsbTask::HandleResume(void *pvUsbTask)
-{
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-}
-
-
-void UsbTask::HandleDevice(void *pvUsbTask, uint32_t ui32Request,
-                         void *pvRequestData)
-{
-    UsbTask* usbTask = (UsbTask*)pvUsbTask;
-}

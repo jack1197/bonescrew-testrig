@@ -33,8 +33,8 @@ void HeartbeatTask::TaskMethod()
         uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
 
         blinkLed->setActiveState(0);
-        vTaskDelayUntil(&xLastWakeTime, 500 / portTICK_RATE_MS );
+        vTaskDelayUntil(&xLastWakeTime, 5000 );
         blinkLed->setActiveState(1);
-        vTaskDelayUntil(&xLastWakeTime, 50 / portTICK_RATE_MS );
+        vTaskDelayUntil(&xLastWakeTime, 500 );
     }
 }
