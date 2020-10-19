@@ -25,9 +25,16 @@ extern "C"
 
 #include "PeriphDefines.hpp"
 
-#include "Tasks/UsbTask.hpp"
+//#include "Tasks/UsbTask.hpp"
 #include "Tasks/HeartbeatTask.hpp"
 #include "Tasks/DatalogTask.hpp"
+#include "Tasks/MotorTask.hpp"
+#include "Tasks/UartStatusTask.hpp"
+#include "Tasks/UartControlTask.hpp"
+#include "Tasks/MotionTask.hpp"
+#include "Model/MotionSegment.hpp"
+#include "Model/Status.hpp"
+#include "Model/Settings.hpp"
 
 
 
@@ -60,62 +67,40 @@ extern "C"
 #include "utils/ustdlib.h"
 }
 
-#ifdef DEBUG
-void __error__(char *pcFilename, uint32_t ui32Line)
-{
-    UARTprintf("Error at line %d of %s\n", ui32Line, pcFilename);
-    while(1)
-    {
-    }
-}
-#endif
-
 int main(void)
 {
 
 	SysCtlClockSet (SYSCTL_SYSDIV_2_5 | SYSCTL_USE_PLL | SYSCTL_OSC_MAIN |
 	                    SYSCTL_XTAL_16MHZ);
 
-	//
-	    // Enable the GPIO Peripheral used by the UART.
-	    //
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
 
-    //
-    // Enable UART0
-    //
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
-
-    //
-    // Configure GPIO Pins for UART mode.
-    //
-    GPIOPinConfigure(GPIO_PA0_U0RX);
-    GPIOPinConfigure(GPIO_PA1_U0TX);
-    GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
-
-    //
-    // Use the internal 16MHz oscillator as the UART clock source.
-    //
-    UARTClockSourceSet(UART0_BASE, UART_CLOCK_PIOSC);
-
-    //
-    // Initialize the UART for console I/O.
-    //
-    UARTStdioConfig(0, 115200, 16000000);
-
-    static Queue<QueueableEvent> usbEventQueue = Queue<QueueableEvent>(16);
+    static Queue<UsbDataEvent> usbEventQueue = Queue<UsbDataEvent>(16);
     static Queue<DataFrame> outputBuffer(16);
+    static Queue<ControlEvent> controlQueue = Queue<ControlEvent>(16);
+    static Queue<MotionSegment> motionQueue(2);
     static Semaphore dataShouldStart(1,0);
     static Semaphore dataHasEnded(1,0);
+    static Settings settings;
+    static Status status;
     static bool shouldStop = false;
     static bool shouldSendData = false;
 
-    static UsbTask usbTask(&led1, &usbEventQueue, &outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &shouldSendData);
-    usbTask.Initialize();
+    //static UsbTask usbTask(&led1, &usbEventQueue, &outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &shouldSendData);
+    //usbTask.Initialize();
     static HeartbeatTask heartbeatTask(&led2);
     heartbeatTask.Initialize();
-    static DatalogTask datalogTask(&outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &usbEventQueue, &shouldSendData);
+    static DatalogTask datalogTask(&outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &usbEventQueue, &shouldSendData, &status, &motor_enc, &sensor_enc);
     datalogTask.Initialize();
+    static MotorTask motorTask(&motor_pul, &motor_dir, &motor_ena, &motor_alm, &motor_pend, &motionQueue, &status, &settings);
+    motorTask.Initialize();
+    static MotionTask motionTask(&motionQueue,&controlQueue,&settings );
+    motionTask.Initialize();
+    //static UartStatusTask uartStatusTask(&status, &usbUart);
+    //uartStatusTask.Initialize();
+    static UartControlTask uartControlTask(&usbUart, &controlQueue, &settings);
+    uartControlTask.Initialize();
+
+
 
     vTaskStartScheduler();
 

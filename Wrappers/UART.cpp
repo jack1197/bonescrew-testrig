@@ -223,3 +223,30 @@ int UART::Recv(char* buffer, int maxSize)
     return len;
 
 }
+
+int UART::RecvLn(char* buffer, int maxSize)
+{
+    int len = 0;
+    if(maxSize <= 0) return len;
+
+    char* end = buffer + maxSize - 1;
+
+    while(buffer < (end-1) && *(buffer-1) != '\n' && *(buffer-1) != '\r')
+    {
+        if(!Available())
+        {
+            vTaskDelay(10);
+            continue;
+        }
+        char recv = UARTCharGet(UartTypeToBase(uart));
+        *buffer = recv;
+        buffer++;
+        len++;
+    }
+
+    *(buffer-1)= '\r';
+    *(buffer)= '\n';
+    *(buffer+1) = '\0';
+    return len;
+
+}

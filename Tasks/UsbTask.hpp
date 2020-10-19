@@ -42,7 +42,6 @@ class UsbTask: public BaseTask
 
     static tUSBBuffer cmdBuffer;
     static tUSBBuffer rspBuffer;
-    static tUSBBuffer datBuffer;
     static const uint16_t g_ui16MaxPacketSize;
     static void HandleReset(void *pvUsbTask);
     static void HandleEndpoints(void *pvUsbTask, uint32_t ui32Status);
@@ -50,25 +49,20 @@ class UsbTask: public BaseTask
 
     void processCmdEP(uint32_t ui32Status);
     void processRspEP(uint32_t ui32Status);
-    void processDatEP(uint32_t ui32Status);
 
     static uint32_t rxHandlerCmdEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData);
     static uint32_t txHandlerRspEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData);
-    static uint32_t txHandlerDatEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData);
 
     static uint32_t availableCmdEP(void *pvHandle);
     static uint32_t availableRspEP(void *pvHandle);
-    static uint32_t availableDatEP(void *pvHandle);
 
     static uint32_t readCmdEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast);
     static uint32_t writeRspEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast);
-    static uint32_t writeDatEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast);
 
     GPIO* activeLed;
 
     bool defferedRead = false;
     uint32_t lastRspSize = 0;
-    uint32_t lastDatSize = 0;
     bool rspActive = false;
     bool datActive = false;
     bool logging = false;
@@ -77,7 +71,7 @@ class UsbTask: public BaseTask
     const char* rspResume = nullptr;
     uint32_t rspRemaining = 0;
 
-    Queue<QueueableEvent>* usbEventQueue;
+    Queue<UsbDataEvent>* usbEventQueue;
 
     void startRsp(const char* toSend, size_t length);
     Queue<DataFrame>* outputBuffer;
@@ -92,7 +86,7 @@ protected:
 
 public:
 
-    UsbTask(GPIO* activeLed, Queue<QueueableEvent>* usbEventQueue, Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, bool* shouldSendData);
+    UsbTask(GPIO* activeLed, Queue<UsbDataEvent>* usbEventQueue, Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, bool* shouldSendData);
 };
 
 #endif /* TASKS_USBTASK_HPP_ */

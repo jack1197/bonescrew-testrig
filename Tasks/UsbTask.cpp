@@ -288,7 +288,7 @@ tDeviceInfo UsbTask::g_sTorqueDeviceInfo =
 
 };
 
-UsbTask::UsbTask(GPIO* activeLed, Queue<QueueableEvent>* usbEventQueue, Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, bool* shouldSendData)
+UsbTask::UsbTask(GPIO* activeLed, Queue<UsbDataEvent>* usbEventQueue, Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, bool* shouldSendData)
     :activeLed(activeLed), usbEventQueue(usbEventQueue), outputBuffer(outputBuffer), dataShouldStart(dataShouldStart), dataHasEnded(dataHasEnded), shouldStop(shouldStop), shouldSendData(shouldSendData)
 {
     priority = 3;
@@ -325,20 +325,6 @@ tUSBBuffer UsbTask::rspBuffer =
 };
 #define DAT_BUFFER_SIZE 32
 
-static uint8_t datBufferArray[DAT_BUFFER_SIZE];
-tUSBBuffer UsbTask::datBuffer =
-{
-    true, //APP->USB
-    txHandlerDatEP,
-    0,
-    writeDatEP,
-    availableDatEP,
-    0,
-    datBufferArray,
-    DAT_BUFFER_SIZE
-};
-
-
 void UsbTask::Setup()
 {
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
@@ -357,15 +343,12 @@ void UsbTask::Setup()
 
     cmdBuffer.pvCBData = (void*)this;
     rspBuffer.pvCBData = (void*)this;
-    datBuffer.pvCBData = (void*)this;
 
     cmdBuffer.pvHandle = (void*)this;
     rspBuffer.pvHandle = (void*)this;
-    datBuffer.pvHandle = (void*)this;
 
     USBBufferInit(&cmdBuffer);
     USBBufferInit(&rspBuffer);
-    USBBufferInit(&datBuffer);
 
 }
 
@@ -373,7 +356,7 @@ void UsbTask::Setup()
 void UsbTask::HandleReset(void *pvUsbTask)//first connect or reconnect
 {
     UsbTask* usbTask = (UsbTask*)pvUsbTask;
-    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::Reset, false);
+    usbTask->usbEventQueue->EnqueueFromISR(UsbDataEvent::Reset, false);
 }
 
 
@@ -391,7 +374,10 @@ void UsbTask::HandleEndpoints(void *pvUsbTask, uint32_t ui32Status)
     }
     if(ui32Status & USB_EP_DESC_IN | USBEPToIndex(USB_EP_3))
     {
-        usbTask->processDatEP(ui32Status);
+        uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_3);
+        USBDevEndpointStatusClear(USB0_BASE, USB_EP_3, EPStatus);
+        usbTask->datActive = false;
+        usbTask->usbEventQueue->EnqueueFromISR(UsbDataEvent::DatReady, false);
     }
 }
 
@@ -430,13 +416,6 @@ void UsbTask::processRspEP(uint32_t ui32Status)
     USBBufferEventCallback(&rspBuffer, USB_EVENT_TX_COMPLETE, lastRspSize, (void*)0);
 }
 
-void UsbTask::processDatEP(uint32_t ui32Status)
-{
-    uint32_t EPStatus = USBEndpointStatus(USB0_BASE, USB_EP_3);
-    USBDevEndpointStatusClear(USB0_BASE, USB_EP_3, EPStatus);
-    datActive = false;
-    USBBufferEventCallback(&datBuffer, USB_EVENT_TX_COMPLETE, lastDatSize, (void*)0);
-}
 
 uint32_t UsbTask::availableCmdEP(void *pvHandle)
 {
@@ -467,20 +446,6 @@ uint32_t UsbTask::availableRspEP(void *pvHandle)
 
 }
 
-uint32_t UsbTask::availableDatEP(void *pvHandle)
-{
-    UsbTask* usbTask = (UsbTask*)pvHandle;
-
-    if(usbTask->datActive)
-    {
-        return 0;
-    }
-    else
-    {
-        return g_ui16MaxPacketSize;
-    }
-
-}
 
 uint32_t UsbTask::readCmdEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast)
 {
@@ -529,30 +494,6 @@ uint32_t UsbTask::writeRspEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Leng
     }
 }
 
-uint32_t UsbTask::writeDatEP(void *pvHandle, uint8_t *pi8Data, uint32_t ui32Length, bool bLast)
-{
-    UsbTask* usbTask = (UsbTask*)pvHandle;
-    if(ui32Length > g_ui16MaxPacketSize || usbTask->datActive) return 0;
-    //clamp length to multiple of 16
-    ui32Length = (ui32Length / 16) * 16;
-
-    int32_t status = USBEndpointDataPut(USB0_BASE, USB_EP_3, pi8Data, ui32Length);
-
-    if(status != -1)
-    {
-        usbTask->lastDatSize = ui32Length;
-        if(bLast)
-        {
-            usbTask->datActive = true;
-            USBEndpointDataSend(USB0_BASE, USB_EP_3, USB_TRANS_IN);
-        }
-        return ui32Length;
-    }
-    else
-    {
-        return 0;
-    }
-}
 
 
 static const char hw_typeCmd[] = "hw_type\r";
@@ -622,7 +563,7 @@ static const char angle_readRsp[] = "angle_read 0 0\r\n";
 uint32_t UsbTask::rxHandlerCmdEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData)
 {
     UsbTask* usbTask = (UsbTask*)pvCBData;
-    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::CmdAvail, false);
+    usbTask->usbEventQueue->EnqueueFromISR(UsbDataEvent::CmdAvail, false);
 //    uint8_t buffer[65];
 //    uint32_t read = USBBufferRead(&cmdBuffer,buffer, 64);
 //    USBBufferWrite(&rspBuffer, buffer, read+1);
@@ -634,17 +575,10 @@ uint32_t UsbTask::rxHandlerCmdEP(void* pvCBData, uint32_t ui32Event, uint32_t ui
 uint32_t UsbTask::txHandlerRspEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData)
 {
     UsbTask* usbTask = (UsbTask*)pvCBData;
-    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::RspAvail, false);
+    usbTask->usbEventQueue->EnqueueFromISR(UsbDataEvent::RspAvail, false);
     return 0;
 }
 
-uint32_t UsbTask::txHandlerDatEP(void* pvCBData, uint32_t ui32Event, uint32_t ui32MsgParam, void *pvMsgData)
-{
-    UsbTask* usbTask = (UsbTask*)pvCBData;
-    usbTask->usbEventQueue->EnqueueFromISR(QueueableEvent::DatReady, false);
-    return 0;
-
-}
 
 void UsbTask::TaskMethod()
 {
@@ -657,12 +591,12 @@ void UsbTask::TaskMethod()
     {
 
         uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-        QueueableEvent event = QueueableEvent::NoEvent;
+        UsbDataEvent event = UsbDataEvent::NoEvent;
         usbEventQueue->Dequeue(&event, true);
 
         switch(event)
         {
-        case QueueableEvent::CmdAvail:
+        case UsbDataEvent::CmdAvail:
         {
             //assuming all commands fit in 1 packet
             char cmd[65];
@@ -702,7 +636,7 @@ void UsbTask::TaskMethod()
             }
         }
             break;
-        case QueueableEvent::RspAvail:
+        case UsbDataEvent::RspAvail:
             if(rspRemaining && rspResume)
             {
                 uint32_t written = 0;
@@ -721,32 +655,36 @@ void UsbTask::TaskMethod()
                 } while (written > 0 && rspResume && rspRemaining);
             }
             break;
-        case QueueableEvent::DatAvail:
+        case UsbDataEvent::DatAvail:
             //remove block from DataAvail events
             if(*shouldSendData){
                 *shouldSendData = false;
             }
             //intended fallthrough
-        case QueueableEvent::DatReady:
+        case UsbDataEvent::DatReady:
         {
-            bool success;
-            do
+            if(!datActive)
             {
-                DataFrame frame;
-                success = false;
-                if(USBBufferSpaceAvailable(&datBuffer) < sizeof(DataFrame)) break;
-                success = outputBuffer->Dequeue(&frame, false);
-                if (success)
+                uint8_t packetData[64];
+                //can put up to 4 frames in 64 byte packet
+                int i= 0;
+                for(;i < 4;i++)
                 {
-                    //may take 2 writes
-                    int written = USBBufferWrite(&datBuffer, (uint8_t*)&frame, sizeof(DataFrame));
-                    written += USBBufferWrite(&datBuffer, ((uint8_t*)&frame) + written, sizeof(DataFrame)- written);
-                    if (written != sizeof(DataFrame)) while(1){};
+                    bool success = outputBuffer->Dequeue((DataFrame*)((&packetData)+(i*16)), false);
+                    if (!success) break;
                 }
-            } while(success);
+                uint32_t length = i*16;
+                int32_t status = USBEndpointDataPut(USB0_BASE, USB_EP_3, packetData, length);
+                if(status != -1)
+                {
+                    datActive = true;
+                    USBEndpointDataSend(USB0_BASE, USB_EP_3, USB_TRANS_IN);
+                }
+
+            }
         }
             break;
-        case QueueableEvent::Reset:
+        case UsbDataEvent::Reset:
             rspRemaining = 0;
             rspResume = nullptr;
             {

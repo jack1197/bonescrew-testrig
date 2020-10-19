@@ -25,6 +25,7 @@ public:
     void Send(const char* toSend);
     bool Available();
     int Recv(char* buffer, int maxSize);
+    int RecvLn(char* buffer, int maxSize);
 };
 
 #endif /* WRAPPERS_UART_HPP_ */

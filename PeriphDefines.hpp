@@ -13,9 +13,21 @@
 
 #include "Wrappers/GPIO.hpp"
 #include "Wrappers/UART.hpp"
+#include "Wrappers/QEI.hpp"
 
 extern GPIO led1;
 extern GPIO led2;
 extern GPIO led3;
+
+extern GPIO motor_pul;
+extern GPIO motor_dir;
+extern GPIO motor_ena;
+extern GPIO motor_alm;
+extern GPIO motor_pend;
+
+extern QEI motor_enc;
+extern QEI sensor_enc;
+
+extern UART usbUart;
 
 #endif /* PERIPHDEFINES_HPP_ */

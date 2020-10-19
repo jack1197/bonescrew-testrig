@@ -8,10 +8,12 @@
 #ifndef TASKS_DATALOGTASK_HPP_
 #define TASKS_DATALOGTASK_HPP_
 
+#include <Model/Enums.hpp>
 #include <Tasks/BaseTask.hpp>
-#include <Tasks/QueueableEvent.hpp>
 #include <Wrappers/Semaphore.hpp>
 #include <Wrappers/Queue.hpp>
+#include <Wrappers/QEI.hpp>
+#include <Model/Status.hpp>
 
 typedef struct  __attribute__ ((packed)) {
     uint32_t count;
@@ -25,17 +27,29 @@ typedef struct  __attribute__ ((packed)) {
 class DatalogTask: public BaseTask
 {
     Queue<DataFrame>* outputBuffer;
-    Queue<QueueableEvent>* usbEventQueue;
+    Queue<UsbDataEvent>* usbEventQueue;
     Semaphore* dataShouldStart;
     Semaphore* dataHasEnded;
+    Status* status;
+    QEI* motor_enc;
+    QEI* sensor_enc;
     bool* shouldStop;
     bool* shouldSendData;
-    void RunDatalog();
+    static Semaphore gotReadingSemaphore;
+    static void ISRHandler();
 protected:
     void Setup();
     void TaskMethod();
 public:
-    DatalogTask(Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, Queue<QueueableEvent>* usbEventQueue, bool* shouldSendData);
+    DatalogTask(Queue<DataFrame>* outputBuffer,
+                Semaphore* dataShouldStart,
+                Semaphore* dataHasEnded,
+                bool* shouldStop,
+                Queue<UsbDataEvent>* usbEventQueue,
+                bool* shouldSendData,
+                Status* status,
+                QEI* motor_enc,
+                QEI* sensor_enc);
 };
 
 #endif /* TASKS_DATALOGTASK_HPP_ */
