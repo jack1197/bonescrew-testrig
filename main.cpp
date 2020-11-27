@@ -25,7 +25,7 @@ extern "C"
 
 #include "PeriphDefines.hpp"
 
-//#include "Tasks/UsbTask.hpp"
+#include "Tasks/UsbTask.hpp"
 #include "Tasks/HeartbeatTask.hpp"
 #include "Tasks/DatalogTask.hpp"
 #include "Tasks/MotorTask.hpp"
@@ -75,7 +75,7 @@ int main(void)
 
 
     static Queue<UsbDataEvent> usbEventQueue = Queue<UsbDataEvent>(16);
-    static Queue<DataFrame> outputBuffer(16);
+    static Queue<DataFrame> outputBuffer(2);
     static Queue<ControlEvent> controlQueue = Queue<ControlEvent>(16);
     static Queue<MotionSegment> motionQueue(2);
     static Semaphore dataShouldStart(1,0);
@@ -85,8 +85,8 @@ int main(void)
     static bool shouldStop = false;
     static bool shouldSendData = false;
 
-    //static UsbTask usbTask(&led1, &usbEventQueue, &outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &shouldSendData);
-    //usbTask.Initialize();
+    static UsbTask usbTask(&led1, &usbEventQueue, &outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &shouldSendData);
+    usbTask.Initialize();
     static HeartbeatTask heartbeatTask(&led2);
     heartbeatTask.Initialize();
     static DatalogTask datalogTask(&outputBuffer, &dataShouldStart, &dataHasEnded, &shouldStop, &usbEventQueue, &shouldSendData, &status, &motor_enc, &sensor_enc);
@@ -95,9 +95,9 @@ int main(void)
     motorTask.Initialize();
     static MotionTask motionTask(&motionQueue,&controlQueue,&settings );
     motionTask.Initialize();
-    //static UartStatusTask uartStatusTask(&status, &usbUart);
-    //uartStatusTask.Initialize();
-    static UartControlTask uartControlTask(&usbUart, &controlQueue, &settings);
+    static UartStatusTask uartStatusTask(&status, &usbUart);
+    uartStatusTask.Initialize();
+    static UartControlTask uartControlTask(&usbUart, &controlQueue, &settings, &status);
     uartControlTask.Initialize();
 
 

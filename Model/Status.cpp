@@ -6,6 +6,7 @@
  */
 
 #include <Model/Status.hpp>
+#include <cstring>
 
 
 void Status::setMotorEncoder(int value)
@@ -47,3 +48,26 @@ int Status::getMotorSpeed()
 {
     return motorSpeed;
 }
+
+const char * Status::getInputString()
+{
+    return inputString;
+}
+
+const char * Status::getOutputString()
+{
+    return outputString;
+}
+
+void Status::setInputString(const char * string)
+{
+    inputString[49] = '\0';
+    strncpy(inputString, string, 49);
+}
+
+void Status::setOutputString(const char * string)
+{
+    inputString[49] = '\0';
+    strncpy(outputString, string, 49);
+}
+

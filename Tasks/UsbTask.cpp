@@ -291,7 +291,7 @@ tDeviceInfo UsbTask::g_sTorqueDeviceInfo =
 UsbTask::UsbTask(GPIO* activeLed, Queue<UsbDataEvent>* usbEventQueue, Queue<DataFrame>* outputBuffer, Semaphore* dataShouldStart, Semaphore* dataHasEnded, bool* shouldStop, bool* shouldSendData)
     :activeLed(activeLed), usbEventQueue(usbEventQueue), outputBuffer(outputBuffer), dataShouldStart(dataShouldStart), dataHasEnded(dataHasEnded), shouldStop(shouldStop), shouldSendData(shouldSendData)
 {
-    priority = 3;
+    priority = 13;
     stackSize = 1024;
     taskName = "UsbTask";
 }
@@ -583,8 +583,7 @@ uint32_t UsbTask::txHandlerRspEP(void* pvCBData, uint32_t ui32Event, uint32_t ui
 void UsbTask::TaskMethod()
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-
-
+    uint32_t countOffset = 0;
 
     volatile UBaseType_t uxHighWaterMark;
     while(1)
@@ -617,16 +616,21 @@ void UsbTask::TaskMethod()
                 }
                 else if (strncmp(cmd, measure_startCmd, sizeof(measure_startCmd)-1) == 0)
                 {
-                    logging = true;
-                    dataShouldStart->Give();
+//                    logging = true;
+                    DataFrame firstFrame;
+                    DataFrame secondFrame;
+                    while(outputBuffer->Dequeue(&firstFrame, false));//remove old frames
+                    outputBuffer->Dequeue(&firstFrame, true);//wait for first 2 new frames, and put back into buffer for remaining code
+                    outputBuffer->Dequeue(&secondFrame, true);//wait for first 2 new frames, and put back into buffer for remaining code
+                    outputBuffer->Enqueue(firstFrame, false);
+                    outputBuffer->Enqueue(secondFrame, false);
+                    countOffset = firstFrame.count;
+
                     startRsp(measure_startRsp, sizeof(measure_startRsp)-1);
                 }
                 else if (strncmp(cmd, measure_stopCmd, sizeof(measure_stopCmd)-1) == 0)
                 {
-                    *shouldStop = true;
-                    dataHasEnded->Take();
-                    *shouldStop = false;
-                    logging = false;
+//                    logging = false;
                     startRsp(measure_stopRsp, sizeof(measure_stopRsp)-1);
                 }
                 else if (strncmp(cmd, angle_readCmd, sizeof(angle_readCmd)-1) == 0)
@@ -655,22 +659,26 @@ void UsbTask::TaskMethod()
                 } while (written > 0 && rspResume && rspRemaining);
             }
             break;
-        case UsbDataEvent::DatAvail:
-            //remove block from DataAvail events
-            if(*shouldSendData){
-                *shouldSendData = false;
-            }
-            //intended fallthrough
+//        case UsbDataEvent::DatAvail:
+//            //remove block from DataAvail events
+//            if(*shouldSendData){
+//                *shouldSendData = false;
+//            }
+//            //intended fallthrough
         case UsbDataEvent::DatReady:
         {
             if(!datActive)
             {
                 uint8_t packetData[64];
-                //can put up to 4 frames in 64 byte packet
+                //can put up to 4 frames in 64 byte packet, send as many as possible
+                //EDIT: Actually changing to only put max 1 in
                 int i= 0;
-                for(;i < 4;i++)
+                for(;i < 1;i++)
                 {
-                    bool success = outputBuffer->Dequeue((DataFrame*)((&packetData)+(i*16)), false);
+                    DataFrame firstFrame;
+                    bool success = outputBuffer->Dequeue(&firstFrame, true);
+                    firstFrame.count -= countOffset;
+                    *((DataFrame*)((&packetData)+(i*16))) = firstFrame;
                     if (!success) break;
                 }
                 uint32_t length = i*16;
@@ -695,17 +703,18 @@ void UsbTask::TaskMethod()
                     success = outputBuffer->Dequeue(&frame, false);
                 } while(success);
             }
-            if(logging)
-            {
-                *shouldStop = true;
-                dataHasEnded->Take();
-                *shouldStop = false;
-                logging = false;
-            }
+//            if(logging)
+//            {
+//                *shouldStop = true;
+//                dataHasEnded->Take();
+//                *shouldStop = false;
+//                logging = false;
+//            }
             break;
         default:
             break;
         }
+        //vTaskDelayUntil(&xLastWakeTime, 10);
     }
 }
 

@@ -35,7 +35,7 @@ void UartStatusTask::TaskMethod()
     while(1)
     {
         uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-        char string[30];
+        char string[60];
 
         uart->Send("\n***Test Rig Status***\n\n\r");
         usnprintf (string, sizeof(string), "Motor Encoder:  %d\033[K\n\r",
@@ -50,8 +50,19 @@ void UartStatusTask::TaskMethod()
                    status->getSensorEncoder());
         uart->Send(string);
 
-        usnprintf (string, sizeof(string), "Sensor Torque:  %d\033[K\r\033[6A",
-                   status->getSensorTorque());
+        int torqueFP3dp = status->getSensorTorque();
+        int whole = torqueFP3dp/1000;
+        int fraction = abs(torqueFP3dp)%1000;
+
+        usnprintf (string, sizeof(string), "Sensor Torque:  %02d.%03d Nm\033[K\n\r",
+                   whole, fraction);
+        uart->Send(string);
+
+        usnprintf (string, sizeof(string), "?> %s\033[K\n\r", status->getInputString());
+        uart->Send(string);
+
+
+        usnprintf (string, sizeof(string), "%s\033[K\r\033[8A",status->getOutputString());
         uart->Send(string);
 
         vTaskDelayUntil(&xLastWakeTime, 1000);

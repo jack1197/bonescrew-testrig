@@ -14,15 +14,21 @@ class Status
     int sensorEncoder = 2;
     int sensorTorque = 3;
     int motorSpeed = 4;
+    char inputString[50] = "";
+    char outputString[50] = "";
 public:
     void setMotorEncoder(int);
     void setSensorEncoder(int);
     void setSensorTorque(int);
     void setMotorSpeed(int);
+    void setInputString(const char *);
+    void setOutputString(const char *);
     int getMotorEncoder();
     int getSensorEncoder();
     int getSensorTorque();
     int getMotorSpeed();
+    const char * getInputString();
+    const char * getOutputString();
 };
 
 #endif /* MODEL_STATUS_HPP_ */

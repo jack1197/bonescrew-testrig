@@ -11,18 +11,18 @@
 class Settings
 {
     bool enableMotor = false; //enable motor driver
-    int insertDist = 15*6400;
-    int reverseDist = 17*6400;
-    int jogDist = 3200;
+    int insertDist = 15*4000;
+    int reverseDist = 17*4000;
+    int jogDist = 2000;
     int fullInsertionPause = 1000;
     bool enableTrapezoid = true;
     //for no trapezoid
-    int insertSpeed = 3200;//CPS
+    int insertSpeed = 2000;//CPS
     //for trapezoid
     int rampTime = 150;//ms to reach full speed
     int highDwellTime = 200;//ms at full speed
     int lowDwellTime = 250;//ms stopped
-    int distPerTrapezoid = 3200;//distance of turning for each trapezoid
+    int distPerTrapezoid = 2000;//distance of turning for each trapezoid
 public:
     void setEnableMotor(bool value);
     void setInsertDist(int value);

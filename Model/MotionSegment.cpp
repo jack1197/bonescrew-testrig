@@ -26,6 +26,10 @@ void MotionSegment::setTickLength(int value)
 void MotionSegment::setWithAngularLength(int pulses, int startSpeed, int endSpeed)
 {
     tickLength = (pulses*2*TICKS_PER_SECOND)/(startSpeed + endSpeed);
+    if(pulses != 0 && tickLength == 0)
+    {
+        tickLength = 1;
+    }
     startCPS = startSpeed;
     endCPS = endSpeed;
     pulsesCorrection = 0;

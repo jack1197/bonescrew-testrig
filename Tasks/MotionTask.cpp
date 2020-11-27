@@ -153,20 +153,30 @@ bool MotionTask::makeLimitedMotion(int dist, int start, int end)
     int pulses = motion.cumulativePulsesForTick(motion.getTickLength()-1);
     if(abs(totalDist + pulses) == abs(targetDist)){
         //done motion - perfect length
+        motionQueue->Enqueue(motion, true);
         onMotionEndstop();
+        motion.setEndSpeed(0);
+        motion.setStartSpeed(0);
+        motion.setTickLength(settings->getFullInsertionPause());
+        motionQueue->Enqueue(motion, true);
         hitEnd = true;
     } else if(abs(totalDist + pulses) > abs(targetDist))
     {
         //motion too long, adjust and then motion done
         motion.setWithAngularLength(targetDist - totalDist, start, end);
+        motionQueue->Enqueue(motion, true);
         onMotionEndstop();
+        motion.setEndSpeed(0);
+        motion.setStartSpeed(0);
+        motion.setTickLength(settings->getFullInsertionPause());
+        motionQueue->Enqueue(motion, true);
         hitEnd = true;
     }
     else
     {
         totalDist += pulses;
+        motionQueue->Enqueue(motion, true);
     }
-    motionQueue->Enqueue(motion, true);
     return hitEnd;
 }
 

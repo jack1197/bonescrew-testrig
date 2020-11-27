@@ -14,14 +14,15 @@
 #include <Wrappers/Queue.hpp>
 #include <Wrappers/QEI.hpp>
 #include <Model/Status.hpp>
+#include "driverlib/udma.h"
 
 typedef struct  __attribute__ ((packed)) {
     uint32_t count;
     int16_t raw;
-    private: int16_t unused1 = 0;
-    public: int16_t torqueFP;
+    int16_t reserved1 = 0;
+    int16_t torqueFP;
     int16_t angVelocity;
-    private: int32_t unused2 = 0;
+    int32_t reserved2 = 0x23002300;
 } DataFrame;
 
 class DatalogTask: public BaseTask
@@ -37,6 +38,11 @@ class DatalogTask: public BaseTask
     bool* shouldSendData;
     static Semaphore gotReadingSemaphore;
     static void ISRHandler();
+    uint16_t ADCbuffers[4][250];
+    static tDMAControlTable DMATaskList[4];
+    static unsigned char nextBuffer;
+
+    uint32_t filteredSample();
 protected:
     void Setup();
     void TaskMethod();

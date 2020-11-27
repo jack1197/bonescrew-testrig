@@ -21,7 +21,7 @@ GPIO motor_ena(GPIO_PORTA, 4, true, false);
 GPIO motor_alm(GPIO_PORTB, 6);
 GPIO motor_pend(GPIO_PORTB, 7);
 
-QEI motor_enc(QeiType::QEI0B);
-QEI sensor_enc(QeiType::QEI1);
+QEI sensor_enc(QeiType::QEI0B);
+QEI motor_enc(QeiType::QEI1);
 
 UART usbUart(UartType::UART0, 115200);

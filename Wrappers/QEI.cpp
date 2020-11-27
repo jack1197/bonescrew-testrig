@@ -6,10 +6,16 @@
  */
 
 #include <Wrappers/QEI.hpp>
+
+
+//#define PART_TM4C123GH6PM
 #include "driverlib/gpio.h"
 #include "driverlib/qei.h"
 #include "driverlib/sysctl.h"
+#include "driverlib/pin_map.h"
+
 #include "inc/hw_memmap.h"
+#include "inc/hw_gpio.h"
 #include "inc/tm4c123gh6pm.h"
 
 uint32_t QEI::QeiTypeToPhAPin(QeiType qeiType)
@@ -35,6 +41,32 @@ uint32_t QEI::QeiTypeToPhBPin(QeiType qeiType)
         return GPIO_PIN_7;
     case QEI1:
         return GPIO_PIN_6;
+    }
+}
+
+uint32_t QEI::QeiTypeToPhAPinConf(QeiType qeiType)
+{
+    switch(qeiType)
+    {
+    case QEI0A:
+        return GPIO_PF0_PHA0;
+    case QEI0B:
+        return GPIO_PD6_PHA0;
+    case QEI1:
+        return GPIO_PC5_PHA1;
+    }
+}
+
+uint32_t QEI::QeiTypeToPhBPinConf(QeiType qeiType)
+{
+    switch(qeiType)
+    {
+    case QEI0A:
+        return GPIO_PF1_PHB0;
+    case QEI0B:
+        return GPIO_PD7_PHB0;
+    case QEI1:
+        return GPIO_PC6_PHB1;
     }
 }
 
@@ -94,9 +126,13 @@ void QEI::init()
     {
         SysCtlPeripheralEnable(QeiTypeToPeriph(qeiType));
         while(!SysCtlPeripheralReady(QeiTypeToPeriph(qeiType)));
-        QEIConfigure(QeiTypeToBase(qeiType), QEI_CONFIG_CAPTURE_A_B | QEI_CONFIG_NO_RESET | QEI_CONFIG_QUADRATURE | QEI_CONFIG_NO_SWAP, ui32MaxPosition);
 
         SysCtlPeripheralEnable(QeiTypeToGPIOPeriph(qeiType));
+        while(!SysCtlPeripheralReady(QeiTypeToGPIOPeriph(qeiType)));
+
+        QEIConfigure(QeiTypeToBase(qeiType), QEI_CONFIG_CAPTURE_A_B | QEI_CONFIG_NO_RESET | QEI_CONFIG_QUADRATURE | QEI_CONFIG_NO_SWAP, ui32MaxPosition);
+
+        QEIEnable(QeiTypeToBase(qeiType));
 
         if(QeiTypeToGPIOPort(qeiType) == GPIO_PORTF_BASE)
         {
@@ -111,11 +147,15 @@ void QEI::init()
             GPIO_PORTD_LOCK_R = GPIO_LOCK_M;
         }
 
+        GPIOPinConfigure(QeiTypeToPhAPinConf(qeiType));
+        GPIOPinConfigure(QeiTypeToPhBPinConf(qeiType));
+
         GPIOPinTypeQEI(QeiTypeToGPIOPort(qeiType), QeiTypeToPhAPin(qeiType));
         GPIOPinTypeQEI(QeiTypeToGPIOPort(qeiType), QeiTypeToPhBPin(qeiType));
 
+        QEIFilterConfigure(QeiTypeToBase(qeiType), QEI_FILTCNT_17);
 
-        QEIEnable(QeiTypeToBase(qeiType));
+        QEIFilterEnable(QeiTypeToBase(qeiType));
         inited = true;
     }
 }

@@ -16,6 +16,8 @@ class QEI
 {
     uint32_t QeiTypeToPhAPin(QeiType QeiType);
     uint32_t QeiTypeToPhBPin(QeiType QeiType);
+    uint32_t QeiTypeToPhAPinConf(QeiType QeiType);
+    uint32_t QeiTypeToPhBPinConf(QeiType QeiType);
     uint32_t QeiTypeToGPIOPort(QeiType QeiType);
     uint32_t QeiTypeToGPIOPeriph(QeiType QeiType);
     uint32_t QeiTypeToBase(QeiType QeiType);
